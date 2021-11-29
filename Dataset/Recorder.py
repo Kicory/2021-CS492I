@@ -5,28 +5,29 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 from threading import Timer
 import time
+from pydub import AudioSegment, effects
 
 parser = argparse.ArgumentParser(description='녹음 및 VGGish를 이용한 feature extraction 자동 수행')
 
 parser.add_argument('--wavOutDir', type=str, required=True,
-                    help='녹음된 wav파일이 저장될 곳')
+                    help='녹음된 wav파일이 저장될 디렉터리 (RawData 아래) \ne.g.,\"--wavOutDir recordedFiles\"')
 
 parser.add_argument('--outDir', '-f', type=str, required=True,
-                    help='VGGish를 통해 추출된 feature가 저장될 디렉터리')
+                    help='VGGish를 통해 추출된 feature가 저장될 디렉터리 (RawData 아래) \ne.g., \"-f features\"')
 
 parser.add_argument('--count','-c', type=int, required=True,
                     help='녹음할 wav 파일 갯수 (= 만들어질 feature 파일 갯수)')
 
-parser.add_argument('--len', '-l', type=int, default=10, required=False,
-                    help='각 wav파일의 길이. 기본 10초')
+parser.add_argument('--len', '-l', type=int, default=0.3, required=False,
+                    help='각 wav파일의 길이. 기본 0.3초')
 
 parser.add_argument('--stride', '-s', type=float, required=False, default=0,
                     help='녹음 파일 간 시간 간격')
 
 args = parser.parse_args()
 
-wavOutDir = os.path.join(args.wavOutDir, '').replace("\\","/")
-outDir = os.path.join(args.outDir, '').replace("\\","/")
+wavOutDir = os.path.join('./RawData', args.wavOutDir, '').replace("\\","/")
+outDir = os.path.join('./RawData', args.outDir, '').replace("\\","/")
 count = args.count
 wavLen = args.len
 wavStride = args.stride
@@ -38,7 +39,7 @@ def getVGGishModel():
 
 def recordFile(wavFileName):
     fs = 16000 #16Khz
-    r = sd.rec(int(wavLen * fs), samplerate=fs, channels=1)
+    r = sd.rec(int(wavLen * fs), samplerate=fs, channels=1, dtype='int16')
     sd.wait()
     outWavFile = wavOutDir + wavFileName
     write(outWavFile, fs, r)
@@ -53,10 +54,17 @@ def looper(model, workCount):
     index = 0
     while index < workCount:
         start_time = time.time()
-        recTask = Timer(wavStride, doMainUnitWork, args=(model, index, ))
-        recTask.daemon = True
-        recTask.start()
-        printProgress(index, workCount, title="{:4d}/{:4d}".format(index, workCount))
+        if index + 1 == workCount:
+            doMainUnitWork(model, index)
+            printProgress(index, workCount, title="{:4d}/{:4d}".format(index + 1, workCount))
+            break
+        else:
+            recTask = Timer(wavStride, doMainUnitWork, args=(model, index, ))
+            recTask.daemon = True
+            recTask.start()
+
+        printProgress(index, workCount, title="{:4d}/{:4d}".format(index + 1, workCount))
+
 
         index = index + 1
         time.sleep(wavStride + wavLen - (time.time() - start_time))
@@ -83,4 +91,5 @@ def printProgress(index, total, bar_len=50, title='Please wait'):
 
     print(f'\t⏳{title}: [{done_str}{togo_str}] {percent_done}% done', end='\r')
 
-main()
+if __name__ == '__main__':
+    main()
