@@ -5,7 +5,6 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 from threading import Timer
 import time
-from pydub import AudioSegment, effects
 
 parser = argparse.ArgumentParser(description='녹음 및 VGGish를 이용한 feature extraction 자동 수행')
 
@@ -15,11 +14,11 @@ parser.add_argument('--wavOutDir', type=str, required=True,
 parser.add_argument('--outDir', '-f', type=str, required=True,
                     help='VGGish를 통해 추출된 feature가 저장될 디렉터리 (RawData 아래) \ne.g., \"-f features\"')
 
-parser.add_argument('--count','-c', type=int, required=True,
+parser.add_argument('--count','-n', type=int, required=True,
                     help='녹음할 wav 파일 갯수 (= 만들어질 feature 파일 갯수)')
 
-parser.add_argument('--len', '-l', type=int, default=0.3, required=False,
-                    help='각 wav파일의 길이. 기본 0.3초')
+parser.add_argument('--len', '-l', type=int, default=10, required=False,
+                    help='각 wav파일의 길이. 기본 10초')
 
 parser.add_argument('--stride', '-s', type=float, required=False, default=0,
                     help='녹음 파일 간 시간 간격')
@@ -51,6 +50,11 @@ def doMainUnitWork(model, index):
     torch.save(model.forward(wavFilePath).detach(), outDir + str(index).zfill(4) + '.pt')
 
 def looper(model, workCount):
+    if not os.path.exists(wavOutDir):
+        os.makedirs(wavOutDir)
+    if not os.path.exists(outDir):
+        os.makedirs(outDir)
+
     index = 0
     while index < workCount:
         start_time = time.time()
@@ -65,16 +69,10 @@ def looper(model, workCount):
 
         printProgress(index, workCount, title="{:4d}/{:4d}".format(index + 1, workCount))
 
-
         index = index + 1
         time.sleep(wavStride + wavLen - (time.time() - start_time))
 
 def main():
-    if not os.path.exists(wavOutDir):
-        os.makedirs(wavOutDir)
-    if not os.path.exists(outDir):
-        os.makedirs(outDir)
-    
     model = getVGGishModel()
     looper(model, count)
 
