@@ -2,6 +2,7 @@ import torch
 import os
 from torch.utils.data import Dataset
 from tqdm import tqdm
+from params import FULL_LABEL_COUNT
 
 tqdmWidth = int(os.get_terminal_size().columns / 1.5)
 
@@ -14,7 +15,7 @@ class AudioSetDataSet(Dataset):
         for d in tqdm(files, ncols=tqdmWidth, desc=f"Loading Data from {dir}"):
             for x, y in torch.load(os.path.join(dir, d)):
                 if allLabel:
-                    y = torch.zeros(527).scatter_(0, y, 1)
+                    y = torch.zeros(FULL_LABEL_COUNT).scatter_(0, y, 1)
                 else:
                     y = torch.Tensor([16 in y or 18 in y or 20 in y or 21 in y])
                 

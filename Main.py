@@ -9,7 +9,7 @@ import torch.optim as optim
 import importlib
 import matplotlib.pyplot as plt
 import argparse
-from AudioSetDataLoader import AudioSetDataSet
+from audioset import AudioSetDataSet
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description='모델 train 및 evaluation 수행')
@@ -20,11 +20,11 @@ parser.add_argument('--model', '-m', type=str, required=True,
 parser.add_argument('--gpu', action='store_true',
                     help='gpu 사용 여부')
 
-parser.add_argument('--batch_size', type=int, required=False, default=10,
-                    help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/[bal_train, eval]/")')
+parser.add_argument('--trainData', type=str, required=False, default='bal_train',
+                    help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/bal_train/")')
 
-parser.add_argument('--train', '-t', action='store_true',
-                    help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/[bal_train, eval]/")')
+parser.add_argument('--batch_size', type=int, required=False, default=10,
+                    help='배치 사이즈')
 
 parser.add_argument('--epoch', '-e', type=int, default=10, required=False,
                     help='epoch 횟수')
@@ -34,12 +34,12 @@ parser.add_argument('--evalWith', type=str, required=False, default=None,
 
 args = parser.parse_args()
 
-# import model to train / evaluate
+# import model to train & evaluate
 module = importlib.import_module(f'Models.{args.model}')
 
 modelSaveDir = f'./TrainedModels/{args.model}/'
 
-trainDataDir = './Dataset/RawData/AudioSet/bal_train/'
+trainDataDir = f'./Dataset/RawData/AudioSet/{args.trainData}/'
 validationDataDir = './DataSet/RawData/AudioSet/eval/'
 
 if args.evalWith:
@@ -58,7 +58,6 @@ def doForward(x, y, model, device, lossFunction):
 
     # Feed `x` into the network, get an output, and keep it in a variable called `logit`. 
     logit = model(x)
-
     # Compute loss using `logit` and `y`, and keep it in a variable called `loss`.
     loss = lossFunction(logit, y)
 
@@ -144,8 +143,8 @@ def train(model, trainingDataLoader, validationDataLoader, optimizer, scheduler,
         scheduler.step()
 
 
-net = module.Classifier(128 * 10)
-optimizer = optim.SGD(net.parameters(), lr=0.1, momentum=0.9, weight_decay=0.0001)
+net = module.Classifier()
+optimizer = optim.Adam(net.parameters(), lr=0.001, weight_decay=0.0001)
 scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50,80], gamma=0.5)
 
 tdl = DataLoader(AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel), batch_size=args.batch_size, pin_memory=True)
