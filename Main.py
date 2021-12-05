@@ -1,10 +1,11 @@
 import os
+from typing import Tuple
 import numpy as np
 import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, dataset
 import torch.optim as optim
 import importlib
 import matplotlib.pyplot as plt
@@ -56,6 +57,7 @@ def doForward(x, y, model, device, lossFunction):
     x = x.to(device=device, dtype=torch.float32)
     y = y.to(device=device, dtype=torch.float32)
 
+
     # Feed `x` into the network, get an output, and keep it in a variable called `logit`. 
     logit = model(x)
     # Compute loss using `logit` and `y`, and keep it in a variable called `loss`.
@@ -63,7 +65,11 @@ def doForward(x, y, model, device, lossFunction):
 
     return x, y, logit, loss
 
-def train(model, trainingDataLoader, validationDataLoader, optimizer, scheduler, lossFunction):
+def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, lossFunction):
+    tds, vds = datasets
+    tdl = DataLoader(tds, batch_size=args.batch_size, pin_memory=True)
+    vdl = DataLoader(vds, batch_size=args.batch_size, pin_memory=True)
+
     best_f1 = 0
     device = 'cuda' if torch.cuda.is_available() and args.gpu else 'cpu'
     model = model.to(device)
@@ -71,9 +77,22 @@ def train(model, trainingDataLoader, validationDataLoader, optimizer, scheduler,
     for epoch in range(args.epoch):
         # Here starts the train loop.
         model.train()
-        for x, y in tqdm(trainingDataLoader, desc=f"training... {epoch} / {args.epoch}", ncols=tqdmWidth, leave=False):
+        for x, y in tqdm(tdl, desc=f"training... {epoch + 1} / {args.epoch}", ncols=tqdmWidth, leave=False):
             
             x, y, _, loss = doForward(x, y, model, device, lossFunction)
+    
+            if model.allLabel:
+                # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
+                totalTrueLabel = y.sum().item()
+                weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
+                weights = torch.full_like(y, weightRatio)
+                weights[y == 1] = 1
+                loss = (loss * weights).mean()
+            else:
+                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
+                weights = torch.full_like(y, tds.getTrueRatio())
+                weights[y == 1] = 1
+                loss = (loss * weights).mean()
 
             # flush out the previously computed gradient.
             optimizer.zero_grad()
@@ -93,9 +112,11 @@ def train(model, trainingDataLoader, validationDataLoader, optimizer, scheduler,
             test_num_data = 0.
             test_num_positive = 0.
             test_num_trueLabel = 0.
-            for x, y in tqdm(validationDataLoader, desc=f"validating... ", ncols=tqdmWidth, leave=False):
+            for x, y in tqdm(vdl, desc=f"validating... ", ncols=tqdmWidth, leave=False):
 
                 x, y, logit, loss = doForward(x, y, model, device, lossFunction)
+                # weighting으로 reduction을 none으로 설정해 놓았기 때문에, 여기 (eval) 에서는 mean()을 걸어 준다.
+                loss = loss.mean()
 
                 # Compute TP, TN, FP, FN
                 _true_postive = ((logit > 0) * y).sum().item()
@@ -140,15 +161,10 @@ def train(model, trainingDataLoader, validationDataLoader, optimizer, scheduler,
                     os.mkdir(modelSaveDir)
                 torch.save(model.state_dict(), os.path.join(modelSaveDir, f'{time.strftime("%H-%M-%S", time.localtime())}_best.pt'))
 
-        scheduler.step()
-
 
 net = module.Classifier()
-optimizer = optim.Adam(net.parameters(), lr=0.001, weight_decay=0.0001)
-scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[50,80], gamma=0.5)
+optimizer = optim.Adam(net.parameters(), lr=0.0001)
+tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel)
+vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel)
 
-tdl = DataLoader(AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel), batch_size=args.batch_size, pin_memory=True)
-vdl = DataLoader(AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel), batch_size=args.batch_size, pin_memory=True)
-
-
-train(net, tdl, vdl, optimizer=optimizer, scheduler=scheduler, lossFunction=nn.BCEWithLogitsLoss())
+train(net, (tds, vds), optimizer=optimizer, lossFunction=nn.BCEWithLogitsLoss(reduction='none'))
