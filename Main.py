@@ -13,7 +13,7 @@ import argparse
 from audioset import AudioSetDataSet
 from tqdm import tqdm
 
-parser = argparse.ArgumentParser(description='모델 train 및 evaluation 수행')
+parser = argparse.ArgumentParser(description='모델 train수행')
 
 parser.add_argument('--model', '-m', type=str, required=True,
                     help='사용할 모델 종류 (./Models/ 디렉터리 하위의, 모델이 구현된 파이썬 파일 이름) e.g., "-m Base"')
@@ -30,24 +30,15 @@ parser.add_argument('--batch_size', type=int, required=False, default=10,
 parser.add_argument('--epoch', '-e', type=int, default=10, required=False,
                     help='epoch 횟수')
 
-parser.add_argument('--evalWith', type=str, required=False, default=None,
-                    help='Evaluation에 사용할 features (./RawData 하위의 주소만) e.g., \"-e RecordFeatures\"')
-
 args = parser.parse_args()
 
-# import model to train & evaluate
+# import model to train
 module = importlib.import_module(f'Models.{args.model}')
 
-modelSaveDir = f'./TrainedModels/{args.model}/'
+modelSaveDir = './TrainedModels/'
 
 trainDataDir = f'./Dataset/RawData/AudioSet/{args.trainData}/'
 validationDataDir = './DataSet/RawData/AudioSet/eval/'
-
-if args.evalWith:
-    resultDir = modelSaveDir
-    evalDataDir = os.path.join('./RawData', args.evalWith, '').replace("\\","/")
-else:
-    evalDataDir = None
 
 tqdmWidth = int(os.get_terminal_size().columns / 1.5)
 
@@ -56,7 +47,6 @@ def doForward(x, y, model, device, lossFunction):
     #  Send `x` and `y` to either cpu or gpu using `device` variable. 
     x = x.to(device=device, dtype=torch.float32)
     y = y.to(device=device, dtype=torch.float32)
-
 
     # Feed `x` into the network, get an output, and keep it in a variable called `logit`. 
     logit = model(x)
@@ -77,31 +67,41 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, l
     for epoch in range(args.epoch):
         # Here starts the train loop.
         model.train()
-        for x, y in tqdm(tdl, desc=f"training... {epoch + 1} / {args.epoch}", ncols=tqdmWidth, leave=False):
+        trainLossSum = 0
+        trainStepCount = 0
+        for xRaw, yRaw in tqdm(tdl, desc=f"training... {str(epoch + 1).zfill(2)} / {str(args.epoch).zfill(2)} || loss: {0 if trainLossSum == 0 else trainLossSum / trainStepCount:.3f}", ncols=tqdmWidth, leave=False):
             
-            x, y, _, loss = doForward(x, y, model, device, lossFunction)
-    
-            if model.allLabel:
-                # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
-                totalTrueLabel = y.sum().item()
-                weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
-                weights = torch.full_like(y, weightRatio)
-                weights[y == 1] = 1
-                loss = (loss * weights).mean()
-            else:
-                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
-                weights = torch.full_like(y, tds.getTrueRatio())
-                weights[y == 1] = 1
-                loss = (loss * weights).mean()
+            batchSize, featureLen, featureChannel = xRaw.size()
 
-            # flush out the previously computed gradient.
-            optimizer.zero_grad()
+            for xRollAmt in range(featureLen):
+                # 앞뒤가 약간씩 바뀌어도 웃는 소리는 웃는 소리임!!!
+                xRolled = torch.roll(xRaw, xRollAmt, 1)
 
-            # backward the computed loss. 
-            loss.backward()
+                x, y, logit, loss = doForward(xRolled, yRaw, model, device, lossFunction)
+                trainLossSum += loss.mean().item()
+        
+                if model.allLabel:
+                    # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
+                    totalTrueLabel = y.sum().item()
+                    weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
+                    weights = torch.full_like(y, weightRatio)
+                    weights[y == 1] = 1
+                    loss = (loss * weights).mean()
+                else:
+                    # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
+                    weights = torch.full_like(y, tds.trueRatio)
+                    weights[y == 1] = 1
+                    loss = (loss * weights).mean()
 
-            # update the network weights. 
-            optimizer.step()
+                # flush out the previously computed gradient.
+                optimizer.zero_grad()
+
+                # backward the computed loss. 
+                loss.backward()
+
+                # update the network weights. 
+                optimizer.step()
+                trainStepCount += 1
 
         # Here starts the test loop.
         model.eval()
@@ -112,17 +112,17 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, l
             test_num_data = 0.
             test_num_positive = 0.
             test_num_trueLabel = 0.
-            for x, y in tqdm(vdl, desc=f"validating... ", ncols=tqdmWidth, leave=False):
+            for xRaw, yRaw in tqdm(vdl, desc=f"validating... ", ncols=tqdmWidth, leave=False):
 
-                x, y, logit, loss = doForward(x, y, model, device, lossFunction)
+                xRaw, yRaw, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
                 # weighting으로 reduction을 none으로 설정해 놓았기 때문에, 여기 (eval) 에서는 mean()을 걸어 준다.
                 loss = loss.mean()
 
                 # Compute TP, TN, FP, FN
-                _true_postive = ((logit > 0) * y).sum().item()
-                _true_negative = ((logit <= 0) * (y == 0)).sum().item()
-                _false_positive = ((logit > 0) * (y == 0)).sum().item()
-                _false_negative = ((logit <= 0) * y).sum().item()
+                _true_postive = ((logit > 0) * yRaw).sum().item()
+                _true_negative = ((logit <= 0) * (yRaw == 0)).sum().item()
+                _false_positive = ((logit > 0) * (yRaw == 0)).sum().item()
+                _false_negative = ((logit <= 0) * yRaw).sum().item()
                 
                 data_count = torch.numel(logit)
 
@@ -152,18 +152,20 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, l
                 f1_score = 2 * (recall * precision) / (recall + precision)
 
             # Just for checking progress
-            print(f'Test result of epoch {epoch + 1}/{args.epoch} || loss: {test_loss:.3f} acc: {accuracy:.3f} precision: {precision:.3f} recall: {recall:.3f} F1 score: {f1_score:.3f}')
+            print(f'Result of epoch {str(epoch + 1).zfill(2)}/{str(args.epoch).zfill(2)} || train loss: {trainLossSum / trainStepCount:.3f} loss: {test_loss:.3f} acc: {accuracy:.3f} precision: {precision:.3f} recall: {recall:.3f} F1 score: {f1_score:.3f}')
 
             # Whenever `test_accuracy` is greater than `best_accuracy`, save network weights with the filename 'best.pt' in the directory specified by `ckpt_dir`.
             if f1_score > best_f1:
                 best_f1 = f1_score
                 if not os.path.exists(modelSaveDir):
                     os.mkdir(modelSaveDir)
-                torch.save(model.state_dict(), os.path.join(modelSaveDir, f'{time.strftime("%H-%M-%S", time.localtime())}_best.pt'))
+                torch.save(model.state_dict(), os.path.join(modelSaveDir, f'{args.model}_best.pt'))
 
 
 net = module.Classifier()
-optimizer = optim.Adam(net.parameters(), lr=0.0001)
+net.train()
+lr = net.lr if hasattr(net, 'lr') else 0.001
+optimizer = optim.AdamW(net.parameters(), lr=lr)
 tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel)
 vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel)
 

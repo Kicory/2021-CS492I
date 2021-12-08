@@ -20,7 +20,7 @@ class LSTMNet(nn.Module):
         
         self.relu = nn.ReLU()
         self.lstm = nn.LSTM(in_channels, hid_channels, num_layers, bias=bias, batch_first=True, dropout=drop_prob, bidirectional=bidirectional)
-        self.fc = nn.Linear(hid_channels, out_channels)
+        self.fc = nn.Linear(hid_channels * (2 if bidirectional else 1), out_channels)
 
     # def _get_init_states(self, batch_size):
     #     weight = next(self.parameters()).data
@@ -43,5 +43,5 @@ class LSTMNet(nn.Module):
     
 class Classifier(LSTMNet):
     def __init__(self):
-        super().__init__(128, 64, 1, 3, bias=False, drop_prob=0.2, bidirectional=False)
+        super().__init__(128, 64, 1, 2, bias=False, drop_prob=0.2, bidirectional=True)
         self.allLabel = False
