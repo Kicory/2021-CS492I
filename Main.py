@@ -21,6 +21,12 @@ parser.add_argument('--model', '-m', type=str, required=True,
 parser.add_argument('--gpu', action='store_true',
                     help='gpu 사용 여부')
 
+parser.add_argument('--roll', action='store_true',
+                    help='input tensor의 앞을 뒤로 보내는 방식으로 augment')
+
+parser.add_argument('--noise', type=int, required=False, default=0,
+                    help='임베딩에 조금의 noise를 넣어서 augment')
+
 parser.add_argument('--trainData', type=str, required=False, default='bal_train',
                     help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/bal_train/")')
 
@@ -39,6 +45,8 @@ modelSaveDir = './TrainedModels/'
 
 trainDataDir = f'./Dataset/RawData/AudioSet/{args.trainData}/'
 validationDataDir = './DataSet/RawData/AudioSet/eval/'
+roll = args.roll
+noise = args.noise
 
 tqdmWidth = int(os.get_terminal_size().columns / 1.5)
 
@@ -55,9 +63,9 @@ def doForward(x, y, model, device, lossFunction):
 
     return x, y, logit, loss
 
-def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, lossFunction):
+def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, scheduler, lossFunction):
     tds, vds = datasets
-    tdl = DataLoader(tds, batch_size=args.batch_size, pin_memory=True)
+    tdl = DataLoader(tds, batch_size=args.batch_size, pin_memory=True, shuffle=True)
     vdl = DataLoader(vds, batch_size=args.batch_size, pin_memory=True)
 
     best_f1 = 0
@@ -71,37 +79,32 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, l
         trainStepCount = 0
         for xRaw, yRaw in tqdm(tdl, desc=f"training... {str(epoch + 1).zfill(2)} / {str(args.epoch).zfill(2)} || loss: {0 if trainLossSum == 0 else trainLossSum / trainStepCount:.3f}", ncols=tqdmWidth, leave=False):
             
-            batchSize, featureLen, featureChannel = xRaw.size()
+            _, y, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
+            trainLossSum += loss.mean().item()
+    
+            if model.allLabel:
+                # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
+                totalTrueLabel = y.sum().item()
+                weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
+                weights = torch.full_like(y, weightRatio)
+                weights[y == 1] = 1
+                loss = (loss * weights).mean()
+            else:
+                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
+                weights = torch.full_like(y, tds.trueRatio)
+                weights[y == 1] = 1
+                # weights[logit > 0] = 1
+                loss = (loss * weights).mean()
 
-            for xRollAmt in range(featureLen):
-                # 앞뒤가 약간씩 바뀌어도 웃는 소리는 웃는 소리임!!!
-                xRolled = torch.roll(xRaw, xRollAmt, 1)
+            # flush out the previously computed gradient.
+            optimizer.zero_grad()
 
-                x, y, logit, loss = doForward(xRolled, yRaw, model, device, lossFunction)
-                trainLossSum += loss.mean().item()
-        
-                if model.allLabel:
-                    # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
-                    totalTrueLabel = y.sum().item()
-                    weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
-                    weights = torch.full_like(y, weightRatio)
-                    weights[y == 1] = 1
-                    loss = (loss * weights).mean()
-                else:
-                    # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
-                    weights = torch.full_like(y, tds.trueRatio)
-                    weights[y == 1] = 1
-                    loss = (loss * weights).mean()
+            # backward the computed loss.
+            loss.backward()
 
-                # flush out the previously computed gradient.
-                optimizer.zero_grad()
-
-                # backward the computed loss. 
-                loss.backward()
-
-                # update the network weights. 
-                optimizer.step()
-                trainStepCount += 1
+            # update the network weights. 
+            optimizer.step()
+            trainStepCount += 1
 
         # Here starts the test loop.
         model.eval()
@@ -160,13 +163,14 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, l
                 if not os.path.exists(modelSaveDir):
                     os.mkdir(modelSaveDir)
                 torch.save(model.state_dict(), os.path.join(modelSaveDir, f'{args.model}_best.pt'))
+        scheduler.step()
 
 
 net = module.Classifier()
 net.train()
-lr = net.lr if hasattr(net, 'lr') else 0.001
-optimizer = optim.AdamW(net.parameters(), lr=lr)
-tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel)
-vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel)
+optimizer = optim.AdamW(net.parameters(), lr=getattr(net, 'lr', 0.001), weight_decay=getattr(net, 'weight_decay', 0.05))
+scheduler = scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=getattr(net, 'lrStep', 20), gamma=getattr(net, 'lrGamma', 0.75))
+tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel, roll=roll, noise=noise)
+vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel, roll=False, noise=False)
 
-train(net, (tds, vds), optimizer=optimizer, lossFunction=nn.BCEWithLogitsLoss(reduction='none'))
+train(net, (tds, vds), optimizer=optimizer, scheduler=scheduler, lossFunction=nn.BCEWithLogitsLoss(reduction='none'))
