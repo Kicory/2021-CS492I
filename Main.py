@@ -23,24 +23,21 @@ parser.add_argument('--gpu', action='store_true',
                     help='gpu 사용 여부')
 
 parser.add_argument('--roll', action='store_true',
-                    help='input tensor의 앞을 뒤로 보내는 방식으로 augment')
+                    help='input tensor의 앞을 뒤로 보내는 방식으로 10배 augment (사용할 것)')
 
 parser.add_argument('--noise', type=int, required=False, default=0,
-                    help='임베딩에 조금의 noise를 넣어서 augment')
+                    help='임베딩에 조금의 noise를 넣어서 augment하는 방식 (사용하지 말 것)')
 
-parser.add_argument('--trueWeight', type=float, required=False, default=None,
+parser.add_argument('--trueWeight', type=float, required=False, default=0.2,
                     help='weights[y == 1] = [trueWeight]')
 
-parser.add_argument('--positiveWeight', type=float, required=False, default=None,
+parser.add_argument('--positiveWeight', type=float, required=False, default=1,
                     help='weights[logit > 0] = [positiveWeight]')
 
-parser.add_argument('--trainData', type=str, required=False, default='bal_train',
-                    help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/bal_train/")')
-
-parser.add_argument('--batch_size', type=int, required=False, default=10,
+parser.add_argument('--batch_size', type=int, required=False, default=256,
                     help='배치 사이즈')
 
-parser.add_argument('--epoch', '-e', type=int, default=10, required=False,
+parser.add_argument('--epoch', '-e', type=int, default=100, required=False,
                     help='epoch 횟수')
 
 args = parser.parse_args()
@@ -50,7 +47,7 @@ module = importlib.import_module(f'Models.{args.model}')
 
 modelSaveDir = './TrainedModels/'
 
-trainDataDir = f'./Dataset/RawData/AudioSet/{args.trainData}/'
+trainDataDir = f'./Dataset/RawData/AudioSet/bal_train/'
 validationDataDir = './DataSet/RawData/AudioSet/eval/'
 roll = args.roll
 noise = args.noise
@@ -89,24 +86,13 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
             _, y, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
             trainLossSum += loss.mean().item()
     
-            if model.allLabel:
-                # Loss weight: False인 classes vs. True인 classes가 gradient에 기여하는 비율 동일하게 설정
-                totalTrueLabel = y.sum().item()
-                weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
-                weights = torch.full_like(y, weightRatio)
-                weights[y == 1] = 1
-                loss = (loss * weights).sum()
-            else:
-                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가
-                # 전체 training 과정에서 기여하는 비율을 동일하게 설정
-                weights = torch.full_like(y, tds.trueRatio)
-                if args.trueWeight is not None:
-                    weights[y == 1] = args.trueWeight
-                # weights[(logit > 0) == (y == 0)] = 1
-                # weights[(logit > 0) == (y == 0)] = tds.trueRatio
-                if args.positiveWeight is not None:
-                    weights[logit > 0] = args.positiveWeight
-                loss = (loss * weights).sum()
+            # Weighted Training
+            weights = torch.full_like(y, tds.trueRatio)
+            if args.trueWeight is not None:
+                weights[y == 1] = args.trueWeight
+            if args.positiveWeight is not None:
+                weights[logit > 0] = args.positiveWeight
+            loss = (loss * weights).sum()
 
             # flush out the previously computed gradient.
             optimizer.zero_grad()
@@ -128,14 +114,14 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
             test_num_positive = 0.
             test_num_trueLabel = 0.
             logit_absolute_sum = 0.
-            for xRaw, yRaw in tqdm(vdl, desc=f"validating... ", ncols=tqdmWidth, leave=False):
+            for xRaw, yRaw in tqdm(vdl, desc="validating... ", ncols=tqdmWidth, leave=False):
 
                 xRaw, yRaw, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
                 # weighting으로 reduction을 none으로 설정해 놓았기 때문에, 여기 (eval) 에서는 mean()을 걸어 준다.
                 loss = loss.mean()
                 logit_absolute_sum += logit.abs().sum()
 
-                # Compute TP, TN, FP, FN
+                # Compute TP, TN, FP, FN to calculate F1 score!
                 _true_postive = ((logit > 0) * yRaw).sum().item()
                 _true_negative = ((logit <= 0) * (yRaw == 0)).sum().item()
                 _false_positive = ((logit > 0) * (yRaw == 0)).sum().item()
@@ -184,7 +170,7 @@ net = module.Classifier()
 net.train()
 optimizer = optim.AdamW(net.parameters(), lr=getattr(net, 'lr', 0.001), weight_decay=getattr(net, 'weight_decay', 0.05))
 scheduler = scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=getattr(net, 'lrStep', 20), gamma=getattr(net, 'lrGamma', 0.75))
-tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel, roll=roll, noise=noise)
-vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel, roll=False, noise=False)
+tds = AudioSetDataSet(trainDataDir, only10Len=True, roll=roll, noise=noise)
+vds = AudioSetDataSet(validationDataDir, only10Len=True, roll=False, noise=False)
 
 train(net, (tds, vds), optimizer=optimizer, scheduler=scheduler, lossFunction=BCEWithLogitsLoss(reduction='none'))

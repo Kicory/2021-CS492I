@@ -7,25 +7,22 @@ from scipy.io.wavfile import write
 from threading import Timer
 import time
 
-parser = argparse.ArgumentParser(description='녹음 및 VGGish를 이용한 feature extraction 자동 수행')
+parser = argparse.ArgumentParser(description='녹음 및 VGGish를 이용한 feature extraction + 모델을 이용한 inference 자동 수행')
 
 parser.add_argument('--wavOutDir', type=str, required=True,
-                    help='녹음된 wav파일이 저장될 디렉터리 (RawData 아래) \ne.g.,\"--wavOutDir recordedFiles\"')
+                    help='녹음된 wav파일이 저장될 디렉터리 (RawData 아래) e.g.,\"--wavOutDir recordedFiles\"')
 
 parser.add_argument('--outDir', '-f', type=str, required=False, default=None,
-                    help='VGGish를 통해 추출된 feature가 저장될 디렉터리 (RawData 아래) \ne.g., \"-f features\"')
+                    help='VGGish를 통해 추출된 feature가 저장될 디렉터리 (RawData 아래) 지정하지 않으면 저장되지 않음. e.g., \"-f features\"')
 
 parser.add_argument('--model', '-m', type=str, required=False, default=None,
                     help='사용할 모델 종류 (./Models/ 디렉터리 하위의, 모델이 구현된 파이썬 파일 이름) e.g., "-m Base"')
 
 parser.add_argument('--count','-n', type=int, required=True,
-                    help='녹음할 wav 파일 갯수 (= 만들어질 feature 파일 갯수)')
-
-parser.add_argument('--len', '-l', type=int, default=10, required=False,
-                    help='각 wav파일의 길이. 기본 10초')
+                    help='녹음할 wav 파일 갯수')
 
 parser.add_argument('--stride', '-s', type=float, required=False, default=0,
-                    help='녹음 파일 간 시간 간격')
+                    help='녹음 간 시간 간격')
 
 args = parser.parse_args()
 
@@ -47,7 +44,7 @@ else:
     model = None
 
 count = args.count
-wavLen = args.len
+wavLen = 10
 wavStride = args.stride
 
 tqdmWidth = int(os.get_terminal_size().columns / 1.5)
@@ -69,17 +66,14 @@ def doMainUnitWork(embedder, index):
     outWavFileName = str(index).zfill(4) + '.wav'
     wavFilePath = recordFile(outWavFileName)
     embed = embedder.forward(wavFilePath).detach()
+
     if outDir is not None:
         torch.save(embed, outDir + str(index).zfill(4) + '.pt')
     
     if model is not None:
         result = model(embed.to(device='cpu').unsqueeze(0)).detach().squeeze()
-        if result.numel() == 1:
-            result = "True" if result.item() else "False"
-        else:
-            result = result > 0
-            result = [labelList[i] for i in result.nonzero()]
-        print(str(index).zfill(4), result)
+        desc = "... is laughter!" if result.item() > 0 else "... is not laughter."
+        print(str(index).zfill(4), desc, f": {result.item():.3f}")
 
 
 def looper(embedder, workCount):

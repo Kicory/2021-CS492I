@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-class BetterFC(nn.Module):
+class Dense(nn.Module):
     def __init__(self, in_channels, out_channels, dropout):
-        super(BetterFC, self).__init__()
+        super(Dense, self).__init__()
 
         self.flatter = nn.Flatten()
         self.fc1 = nn.Linear(in_channels, 128)
@@ -20,7 +20,7 @@ class BetterFC(nn.Module):
         output = self.fc3(output)
         return output
 
-class Classifier(BetterFC):
+class Classifier(Dense):
     def __init__(self):
         self.allLabel = False
         self.lr = 0.00001
