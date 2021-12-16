@@ -42,7 +42,7 @@ class AudioSetDataSet(Dataset):
 
                 # noise 값이 1 이상일 때만 noise 값만큼 반복함
                 for _ in range(noise):
-                    x_noise = self.getNoised(x, 0.1, 5)
+                    x_noise = self.getNoised(x, 0.7, 5)
 
                     #노이즈 추가된 input도 전부 굴려서 넣어줌 (뻥튀기)
                     if roll:

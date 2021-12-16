@@ -43,5 +43,6 @@ class LSTMNet(nn.Module):
     
 class Classifier(LSTMNet):
     def __init__(self):
+        self.lr = 0.0001
         super().__init__(128, 64, 1, 2, bias=False, drop_prob=0.2, bidirectional=True)
         self.allLabel = False

@@ -5,6 +5,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.loss import BCEWithLogitsLoss
 from torch.utils.data import Dataset, DataLoader, dataset
 import torch.optim as optim
 import importlib
@@ -26,6 +27,12 @@ parser.add_argument('--roll', action='store_true',
 
 parser.add_argument('--noise', type=int, required=False, default=0,
                     help='임베딩에 조금의 noise를 넣어서 augment')
+
+parser.add_argument('--trueWeight', type=float, required=False, default=None,
+                    help='weights[y == 1] = [trueWeight]')
+
+parser.add_argument('--positiveWeight', type=float, required=False, default=None,
+                    help='weights[logit > 0] = [positiveWeight]')
 
 parser.add_argument('--trainData', type=str, required=False, default='bal_train',
                     help='Training? (Will use default training data in ".Dataset/RawData/AudioSet/bal_train/")')
@@ -77,7 +84,7 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
         model.train()
         trainLossSum = 0
         trainStepCount = 0
-        for xRaw, yRaw in tqdm(tdl, desc=f"training... {str(epoch + 1).zfill(2)} / {str(args.epoch).zfill(2)} || loss: {0 if trainLossSum == 0 else trainLossSum / trainStepCount:.3f}", ncols=tqdmWidth, leave=False):
+        for xRaw, yRaw in tqdm(tdl, desc=f"training... {str(epoch + 1).zfill(3)} / {str(args.epoch).zfill(3)}", ncols=tqdmWidth, leave=False):
             
             _, y, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
             trainLossSum += loss.mean().item()
@@ -88,13 +95,18 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
                 weightRatio = totalTrueLabel / (y.numel() - totalTrueLabel)
                 weights = torch.full_like(y, weightRatio)
                 weights[y == 1] = 1
-                loss = (loss * weights).mean()
+                loss = (loss * weights).sum()
             else:
-                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가 전체 training 과정에서 기여하는 비율을 동일하게 설정
+                # Loss weight: False인 경우(웃음 X) vs. True인 경우(웃음 O)가
+                # 전체 training 과정에서 기여하는 비율을 동일하게 설정
                 weights = torch.full_like(y, tds.trueRatio)
-                weights[y == 1] = 1
-                # weights[logit > 0] = 1
-                loss = (loss * weights).mean()
+                if args.trueWeight is not None:
+                    weights[y == 1] = args.trueWeight
+                # weights[(logit > 0) == (y == 0)] = 1
+                # weights[(logit > 0) == (y == 0)] = tds.trueRatio
+                if args.positiveWeight is not None:
+                    weights[logit > 0] = args.positiveWeight
+                loss = (loss * weights).sum()
 
             # flush out the previously computed gradient.
             optimizer.zero_grad()
@@ -115,11 +127,13 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
             test_num_data = 0.
             test_num_positive = 0.
             test_num_trueLabel = 0.
+            logit_absolute_sum = 0.
             for xRaw, yRaw in tqdm(vdl, desc=f"validating... ", ncols=tqdmWidth, leave=False):
 
                 xRaw, yRaw, logit, loss = doForward(xRaw, yRaw, model, device, lossFunction)
                 # weighting으로 reduction을 none으로 설정해 놓았기 때문에, 여기 (eval) 에서는 mean()을 걸어 준다.
                 loss = loss.mean()
+                logit_absolute_sum += logit.abs().sum()
 
                 # Compute TP, TN, FP, FN
                 _true_postive = ((logit > 0) * yRaw).sum().item()
@@ -155,7 +169,8 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
                 f1_score = 2 * (recall * precision) / (recall + precision)
 
             # Just for checking progress
-            print(f'Result of epoch {str(epoch + 1).zfill(2)}/{str(args.epoch).zfill(2)} || train loss: {trainLossSum / trainStepCount:.3f} loss: {test_loss:.3f} acc: {accuracy:.3f} precision: {precision:.3f} recall: {recall:.3f} F1 score: {f1_score:.3f}')
+            print(f'Result of epoch {str(epoch + 1).zfill(2)}/{str(args.epoch).zfill(2)} || logit mean: {logit_absolute_sum / test_num_data:.3f} train loss: {trainLossSum / trainStepCount:.3f} loss: {test_loss:.3f} acc: {accuracy:.3f} precision: {precision:.3f} recall: {recall:.3f} F1 score: {f1_score:.3f}')
+            print(f'Other Metrics || Total: {int(test_num_data):d} Total Positives: {int(test_num_positive):d} Total Trues: {int(test_num_trueLabel):d} Max F1: {best_f1:.3f}')
 
             # Whenever `test_accuracy` is greater than `best_accuracy`, save network weights with the filename 'best.pt' in the directory specified by `ckpt_dir`.
             if f1_score > best_f1:
@@ -165,7 +180,6 @@ def train(model, datasets: Tuple[AudioSetDataSet, AudioSetDataSet], optimizer, s
                 torch.save(model.state_dict(), os.path.join(modelSaveDir, f'{args.model}_best.pt'))
         scheduler.step()
 
-
 net = module.Classifier()
 net.train()
 optimizer = optim.AdamW(net.parameters(), lr=getattr(net, 'lr', 0.001), weight_decay=getattr(net, 'weight_decay', 0.05))
@@ -173,4 +187,4 @@ scheduler = scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=getattr(n
 tds = AudioSetDataSet(trainDataDir, only10Len=True, allLabel=net.allLabel, roll=roll, noise=noise)
 vds = AudioSetDataSet(validationDataDir, only10Len=True, allLabel=net.allLabel, roll=False, noise=False)
 
-train(net, (tds, vds), optimizer=optimizer, scheduler=scheduler, lossFunction=nn.BCEWithLogitsLoss(reduction='none'))
+train(net, (tds, vds), optimizer=optimizer, scheduler=scheduler, lossFunction=BCEWithLogitsLoss(reduction='none'))

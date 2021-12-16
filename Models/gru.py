@@ -35,5 +35,6 @@ class GRUNet(nn.Module):
     
 class Classifier(GRUNet):
     def __init__(self):
+        self.lr = 0.0001
         super().__init__(128, 64, 1, 3, drop_prob=0.2)
         self.allLabel = False
