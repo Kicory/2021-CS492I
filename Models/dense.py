@@ -23,5 +23,10 @@ class Dense(nn.Module):
 class Classifier(Dense):
     def __init__(self):
         self.allLabel = False
-        self.lr = 0.00001
-        super().__init__(128 * 10, 1, 0.2)
+        self.lr = 0.0001
+        self.weight_decay = 0.05
+        self.lrStep = 10
+        self.lrGamma = 0.9
+
+        super().__init__(128 * 10, 1, 0.4)
+

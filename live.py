@@ -38,7 +38,7 @@ if args.model is not None:
     # import model to eval
     module = importlib.import_module(f'Models.{args.model}')
     model = module.Classifier()
-    model.load_state_dict(torch.load(os.path.join('./TrainedModels/', f'{args.model}_best.pt'), map_location=torch.device('cpu')))
+    model.load_state_dict(torch.load(os.path.join('./TrainedModels/', f'{args.model}_best.pt'), map_location=torch.device('cpu'))['dict'])
     model.eval()
 else:
     model = None
@@ -73,7 +73,7 @@ def doMainUnitWork(embedder, index):
     if model is not None:
         result = model(embed.to(device='cpu').unsqueeze(0)).detach().squeeze()
         desc = "... is laughter!" if result.item() > 0 else "... is not laughter."
-        print(str(index).zfill(4), desc, f": {result.item():.3f}")
+        print(str(index).zfill(4), desc, f"|| Logit: {result.item():.3f} (Laughter if > 0)")
 
 
 def looper(embedder, workCount):
