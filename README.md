@@ -3,9 +3,9 @@
 
 **OLA: Office Laughter Analyzer** is an audio-based real-time office laughter detection system.
 
-## `main.py`
+## :tada:`main.py`
 `main.py` does training on [AudioSet](https://research.google.com/audioset/)'s feature data, and test the f1 score with evaluation data each epoch.
-### Usage
+### :package:Usage:package:
 `python main.py -m "model file name(without .py)" [--gpu] [--roll]`
 
 *Example:* `python main.py -m dense --gpu --roll`
@@ -16,7 +16,7 @@
 
 `--roll`: Use Embedding Rolling to augment input data. The data will be augmented by 10 times.
 
-### Other Settings
+### :package:Other Settings:package:
 
 *Example:* `python main.py -m dense --noise 5 --trueWeight 0.2 --positiveWeight 1 --batch_size 256 --epoch 10`
 
@@ -30,10 +30,15 @@
 
 `--epoch E`: Set the epoch E.
 
-## `live.py`
+### :package:Special Settings:package:
+*Example:* `python main.py -m lstm --eval`
+
+`--eval`: Activate evaluation mode, only conducts evauation based on saved model in `./TrainedModels`.
+
+## :tada:`live.py`
 `live.py` records audio with local microphone device, and saves the `.wav` file, and extract embedding vector using VGGish model downloaded, and do laughter inference with specified model.
 
-### Usage
+### :package:Usage:package:
 `python live.py -m "model file name(without .py)" --wavOutDir FILE_DIR --count N`
 
 *Example:* `python live.py -m dense --wavOutDir recordedWavs --count 10`
